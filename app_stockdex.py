@@ -8,7 +8,8 @@ from stockdex import Ticker
 from portfolio_utils import (generate_data, estimate_parameters,
                              mean_variance_optimization,
                              wasserstein_robust_optimization,
-                             evaluate_portfolio)
+                             evaluate_portfolio, plot_sdf,
+                             plot_returns_distribution, plot_risk_comparison)
 
 # List of S&P 500 stocks (top 100 by market cap for simplicity)
 SP500_STOCKS = [
@@ -37,6 +38,8 @@ if 'train_ratio' not in st.session_state:
     st.session_state.train_ratio = 0.5
 if 'test_dist' not in st.session_state:
     st.session_state.test_dist = "Normal"
+if 'include_sdf' not in st.session_state:
+    st.session_state.include_sdf = True
     
 # Store data in session state
 if 'returns_data' not in st.session_state:
@@ -270,6 +273,11 @@ def main():
                                            help="When checked, all portfolio weights must be non-negative (≥ 0), meaning you can only buy assets, not short sell them. This is a common constraint for many investors.",
                                            key="no_short_selling")
 
+    st.sidebar.header("Advanced Analysis")
+    include_sdf = st.sidebar.checkbox("Include SDF Analysis", st.session_state.include_sdf,
+                                     help="When checked, the app will calculate and display Stochastic Discount Factor (SDF) analysis, including Wasserstein Expected Discounted Shortfall (WEDS) and related visualizations. This provides deeper insights into how portfolios perform under different market conditions.",
+                                     key="include_sdf")
+
     st.sidebar.header("Scenario Configuration")
     train_ratio = st.sidebar.slider("Training data ratio", 0.1, 0.9, st.session_state.train_ratio, 0.1,
                                     help="Fraction of data used for estimating parameters (training). The remaining data is used for out-of-sample testing. A value of 0.5 means 50% for training, 50% for testing.",
@@ -340,8 +348,8 @@ def main():
         w_robust = wasserstein_robust_optimization(mu_hat, Sigma_hat, gamma, epsilon, no_short_selling)
 
         # --- Evaluate Performance ---
-        mv_metrics = evaluate_portfolio(test_returns, w_mv, alpha)
-        robust_metrics = evaluate_portfolio(test_returns, w_robust, alpha)
+        mv_metrics = evaluate_portfolio(test_returns, w_mv, alpha, include_sdf)
+        robust_metrics = evaluate_portfolio(test_returns, w_robust, alpha, include_sdf)
 
     # --- Display Results ---
     # Create a container for all explanations
@@ -396,8 +404,8 @@ def main():
             try:
                 w_mv = mean_variance_optimization(mu_hat, Sigma_hat, g, no_short_selling)
                 w_robust = wasserstein_robust_optimization(mu_hat, Sigma_hat, g, epsilon, no_short_selling)
-                mv_m = evaluate_portfolio(test_returns, w_mv, alpha)
-                robust_m = evaluate_portfolio(test_returns, w_robust, alpha)
+                mv_m = evaluate_portfolio(test_returns, w_mv, alpha, False)  # Don't include SDF for frontier to save time
+                robust_m = evaluate_portfolio(test_returns, w_robust, alpha, False)
                 mv_returns.append(mv_m["Expected Return"])
                 mv_vols.append(mv_m["Volatility"])
                 robust_returns.append(robust_m["Expected Return"])
@@ -429,15 +437,51 @@ def main():
     sortino_robust = robust_metrics['Expected Return'] / robust_metrics['ES']
     
     # Determine which strategy is better based on the metrics
-    if sharpe_robust > sharpe_mv and sortino_robust > sortino_mv:
-        recommendation = "The **Wasserstein-Robust strategy** appears superior in this scenario, offering better risk-adjusted returns."
-    elif sharpe_mv > sharpe_robust and sortino_mv > sortino_robust:
-        recommendation = "The **Traditional Mean-Variance strategy** appears superior in this scenario, offering better risk-adjusted returns."
-    else:
-        if (sharpe_robust/sharpe_mv + sortino_robust/sortino_mv)/2 > 1:
-            recommendation = "The **Wasserstein-Robust strategy** has a slight edge in this scenario, particularly for risk-conscious investors."
+    if include_sdf and 'WEDS' in mv_metrics and 'WEDS' in robust_metrics:
+        # Calculate WEDS-based ratios
+        weds_ratio_mv = mv_metrics['Expected Return'] / mv_metrics['WEDS']
+        weds_ratio_robust = robust_metrics['Expected Return'] / robust_metrics['WEDS']
+        
+        # Consider all three ratios
+        mv_wins = 0
+        robust_wins = 0
+        
+        if sharpe_mv > sharpe_robust:
+            mv_wins += 1
         else:
-            recommendation = "The **Traditional Mean-Variance strategy** has a slight edge in this scenario, but may be less stable in volatile markets."
+            robust_wins += 1
+            
+        if sortino_mv > sortino_robust:
+            mv_wins += 1
+        else:
+            robust_wins += 1
+            
+        if weds_ratio_mv > weds_ratio_robust:
+            mv_wins += 1
+        else:
+            robust_wins += 1
+        
+        if robust_wins > mv_wins:
+            recommendation = "The **Wasserstein-Robust strategy** appears superior in this scenario, offering better risk-adjusted returns across multiple risk measures."
+        elif mv_wins > robust_wins:
+            recommendation = "The **Traditional Mean-Variance strategy** appears superior in this scenario, offering better risk-adjusted returns across multiple risk measures."
+        else:
+            # If tied, consider the WEDS ratio as the tiebreaker (since it's the most comprehensive)
+            if weds_ratio_robust > weds_ratio_mv:
+                recommendation = "The **Wasserstein-Robust strategy** has a slight edge in this scenario, particularly when accounting for market conditions via the SDF."
+            else:
+                recommendation = "The **Traditional Mean-Variance strategy** has a slight edge in this scenario, but may be less stable during market stress."
+    else:
+        # Original logic for when SDF analysis is not included
+        if sharpe_robust > sharpe_mv and sortino_robust > sortino_mv:
+            recommendation = "The **Wasserstein-Robust strategy** appears superior in this scenario, offering better risk-adjusted returns."
+        elif sharpe_mv > sharpe_robust and sortino_mv > sortino_robust:
+            recommendation = "The **Traditional Mean-Variance strategy** appears superior in this scenario, offering better risk-adjusted returns."
+        else:
+            if (sharpe_robust/sharpe_mv + sortino_robust/sortino_mv)/2 > 1:
+                recommendation = "The **Wasserstein-Robust strategy** has a slight edge in this scenario, particularly for risk-conscious investors."
+            else:
+                recommendation = "The **Traditional Mean-Variance strategy** has a slight edge in this scenario, but may be less stable in volatile markets."
     
     # Main content in a two-column layout with better space utilization
     left_col, right_col = st.columns([1, 1.5])
@@ -459,32 +503,92 @@ def main():
         
         # Performance metrics
         st.subheader("Performance Metrics")
-        metrics_df = pd.DataFrame({
-            "Metric": ["Expected Return", "Volatility", f"Expected Shortfall (α={alpha})"],
-            "Traditional MV": [
-                f"{mv_metrics['Expected Return']:.4f}",
-                f"{mv_metrics['Volatility']:.4f}",
-                f"{mv_metrics['ES']:.4f}"
-            ],
-            "Wasserstein-Robust": [
-                f"{robust_metrics['Expected Return']:.4f}",
-                f"{robust_metrics['Volatility']:.4f}",
-                f"{robust_metrics['ES']:.4f}"
-            ]
-        })
+        
+        # Create metrics dataframe based on whether SDF analysis is included
+        if include_sdf and 'WEDS' in mv_metrics and 'WEDS' in robust_metrics:
+            metrics_df = pd.DataFrame({
+                "Metric": ["Expected Return", "Volatility", f"Expected Shortfall (α={alpha})", "WEDS"],
+                "Traditional MV": [
+                    f"{mv_metrics['Expected Return']:.4f}",
+                    f"{mv_metrics['Volatility']:.4f}",
+                    f"{mv_metrics['ES']:.4f}",
+                    f"{mv_metrics['WEDS']:.4f}"
+                ],
+                "Wasserstein-Robust": [
+                    f"{robust_metrics['Expected Return']:.4f}",
+                    f"{robust_metrics['Volatility']:.4f}",
+                    f"{robust_metrics['ES']:.4f}",
+                    f"{robust_metrics['WEDS']:.4f}"
+                ]
+            })
+            
+            # Add explanation of WEDS
+            st.markdown("""
+            **Risk Measures Explained:**
+            - **Expected Shortfall (ES)**: Average loss in the worst α% of scenarios
+            - **WEDS**: Wasserstein Expected Discounted Shortfall - ES adjusted by the Stochastic Discount Factor (SDF)
+            
+            WEDS provides a more comprehensive risk assessment by accounting for market conditions and their correlation with portfolio returns.
+            """)
+        else:
+            metrics_df = pd.DataFrame({
+                "Metric": ["Expected Return", "Volatility", f"Expected Shortfall (α={alpha})"],
+                "Traditional MV": [
+                    f"{mv_metrics['Expected Return']:.4f}",
+                    f"{mv_metrics['Volatility']:.4f}",
+                    f"{mv_metrics['ES']:.4f}"
+                ],
+                "Wasserstein-Robust": [
+                    f"{robust_metrics['Expected Return']:.4f}",
+                    f"{robust_metrics['Volatility']:.4f}",
+                    f"{robust_metrics['ES']:.4f}"
+                ]
+            })
+            
+            # Add note about risk measure simplification
+            st.markdown("""
+            **Note**: The risk measure used here is the standard Expected Shortfall (ES). For more advanced analysis, enable the SDF Analysis option in the sidebar to calculate the Wasserstein Expected Discounted Shortfall (WEDS), which incorporates the Stochastic Discount Factor (SDF) and distributional robustness.
+            """)
+        
         st.dataframe(metrics_df, use_container_width=True, hide_index=True)
         
-        # Add note about risk measure simplification
-        st.markdown("""
-        **Note**: The risk measure used here is the standard Expected Shortfall (ES). In the full theoretical framework, the Wasserstein Expected Discounted Shortfall (WEDS) is employed, incorporating the Stochastic Discount Factor (SDF) and distributional robustness. For computational simplicity, this implementation uses ES as an approximation.
-        """)
-        
         # Evaluation metrics
-        eval_df = pd.DataFrame({
-            "Metric": ["Sharpe Ratio", "Return-to-ES Ratio"],
-            "Traditional MV": [f"{sharpe_mv:.4f}", f"{sortino_mv:.4f}"],
-            "Wasserstein-Robust": [f"{sharpe_robust:.4f}", f"{sortino_robust:.4f}"]
-        })
+        st.subheader("Evaluation Metrics")
+        
+        if include_sdf and 'WEDS' in mv_metrics and 'WEDS' in robust_metrics:
+            # Calculate WEDS-based ratios
+            weds_ratio_mv = mv_metrics['Expected Return'] / mv_metrics['WEDS']
+            weds_ratio_robust = robust_metrics['Expected Return'] / robust_metrics['WEDS']
+            
+            eval_df = pd.DataFrame({
+                "Metric": ["Sharpe Ratio", "Return-to-ES Ratio", "Return-to-WEDS Ratio"],
+                "Traditional MV": [
+                    f"{sharpe_mv:.4f}",
+                    f"{sortino_mv:.4f}",
+                    f"{weds_ratio_mv:.4f}"
+                ],
+                "Wasserstein-Robust": [
+                    f"{sharpe_robust:.4f}",
+                    f"{sortino_robust:.4f}",
+                    f"{weds_ratio_robust:.4f}"
+                ]
+            })
+            
+            # Add explanation of WEDS ratio
+            st.markdown("""
+            **Evaluation Metrics Explained:**
+            - **Sharpe Ratio**: Return per unit of volatility (higher is better)
+            - **Return-to-ES Ratio**: Return per unit of tail risk measured by ES (higher is better)
+            - **Return-to-WEDS Ratio**: Return per unit of SDF-adjusted tail risk (higher is better)
+            
+            The Return-to-WEDS Ratio provides a more comprehensive assessment of risk-adjusted performance by accounting for market conditions.
+            """)
+        else:
+            eval_df = pd.DataFrame({
+                "Metric": ["Sharpe Ratio", "Return-to-ES Ratio"],
+                "Traditional MV": [f"{sharpe_mv:.4f}", f"{sortino_mv:.4f}"],
+                "Wasserstein-Robust": [f"{sharpe_robust:.4f}", f"{sortino_robust:.4f}"]
+            })
         
         st.dataframe(eval_df, use_container_width=True, hide_index=True)
         
@@ -503,124 +607,322 @@ def main():
         - The **gap between the curves** on the efficient frontier represents the "cost of robustness"
         """)
         
-        # Strategy Evaluation (stacked vertically)
+        # Strategy Evaluation with enhanced visuals
         st.subheader("Strategy Evaluation")
+        
+        # Create a visually appealing recommendation box
+        recommendation_type = ""
+        if "Wasserstein-Robust strategy" in recommendation:
+            box_color = "rgba(76, 175, 80, 0.2)"  # Green background for robust
+            recommendation_type = "robust"
+            strategy_icon = "🛡️"  # Shield icon for robust strategy
+        elif "Traditional Mean-Variance strategy" in recommendation:
+            box_color = "rgba(33, 150, 243, 0.2)"  # Blue background for traditional
+            recommendation_type = "traditional"
+            strategy_icon = "📈"  # Chart icon for traditional strategy
+        else:
+            box_color = "rgba(156, 39, 176, 0.2)"  # Purple background for balanced
+            recommendation_type = "balanced"
+            strategy_icon = "⚖️"  # Balance icon for balanced approach
+        
+        # Display the recommendation in a colored box with an icon
         st.markdown(f"""
-        ### Overall Assessment
+        <div style="background-color: {box_color}; padding: 20px; border-radius: 10px; border-left: 5px solid {'#388e3c' if recommendation_type == 'robust' else '#1976d2' if recommendation_type == 'traditional' else '#7b1fa2'};">
+            <h3 style="margin-top: 0; display: flex; align-items: center;">
+                <span style="font-size: 28px; margin-right: 10px;">{strategy_icon}</span>
+                Overall Assessment
+            </h3>
+            <p style="font-size: 16px; margin-bottom: 20px;">{recommendation}</p>
+        </div>
+        """, unsafe_allow_html=True)
         
-        {recommendation}
-        
-        **For your specific investment goals:**
-        - If you prioritize maximizing returns in stable markets: Consider the Traditional approach
-        - If you prioritize stability and protection against market uncertainty: Consider the Robust approach
-        - For a balanced portfolio: Consider allocating to both strategies
+        # Create a more visual strategy comparison
+        st.markdown("""
+        ### Strategy Comparison
         """)
+        
+        # Create three columns for the three strategy types
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown("""
+            <div style="background-color: rgba(33, 150, 243, 0.1); padding: 15px; border-radius: 10px; height: 100%;">
+                <h4 style="color: #1976d2; margin-top: 0; text-align: center;">
+                    <span style="font-size: 24px;">📈</span><br>
+                    Traditional Strategy
+                </h4>
+                <ul style="margin-bottom: 0;">
+                    <li><strong>Best for:</strong> Stable markets</li>
+                    <li><strong>Focus:</strong> Maximizing returns</li>
+                    <li><strong>Confidence:</strong> High certainty in estimates</li>
+                    <li><strong>Time Horizon:</strong> Shorter-term</li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
+            
+        with col2:
+            st.markdown("""
+            <div style="background-color: rgba(76, 175, 80, 0.1); padding: 15px; border-radius: 10px; height: 100%;">
+                <h4 style="color: #388e3c; margin-top: 0; text-align: center;">
+                    <span style="font-size: 24px;">🛡️</span><br>
+                    Robust Strategy
+                </h4>
+                <ul style="margin-bottom: 0;">
+                    <li><strong>Best for:</strong> Volatile markets</li>
+                    <li><strong>Focus:</strong> Stability & protection</li>
+                    <li><strong>Confidence:</strong> Uncertainty in estimates</li>
+                    <li><strong>Time Horizon:</strong> Longer-term</li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
+            
+        with col3:
+            st.markdown("""
+            <div style="background-color: rgba(156, 39, 176, 0.1); padding: 15px; border-radius: 10px; height: 100%;">
+                <h4 style="color: #7b1fa2; margin-top: 0; text-align: center;">
+                    <span style="font-size: 24px;">⚖️</span><br>
+                    Balanced Approach
+                </h4>
+                <ul style="margin-bottom: 0;">
+                    <li><strong>Best for:</strong> Mixed market conditions</li>
+                    <li><strong>Focus:</strong> Risk-adjusted returns</li>
+                    <li><strong>Confidence:</strong> Moderate certainty</li>
+                    <li><strong>Time Horizon:</strong> Medium to long-term</li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        # Add a visual performance comparison
+        st.markdown("### Performance Comparison")
+        
+        # Create metrics for visual comparison
+        metric_cols = st.columns(3)
+        
+        # Calculate percentage differences
+        sharpe_diff = (sharpe_robust - sharpe_mv) / sharpe_mv * 100
+        es_diff = (sortino_robust - sortino_mv) / sortino_mv * 100
+        
+        # Add WEDS comparison if available
+        if include_sdf and 'WEDS' in mv_metrics and 'WEDS' in robust_metrics:
+            weds_ratio_mv = mv_metrics['Expected Return'] / mv_metrics['WEDS']
+            weds_ratio_robust = robust_metrics['Expected Return'] / robust_metrics['WEDS']
+            weds_diff = (weds_ratio_robust - weds_ratio_mv) / weds_ratio_mv * 100
+            
+            with metric_cols[0]:
+                st.metric(
+                    label="Sharpe Ratio Comparison",
+                    value=f"{sharpe_robust:.4f} vs {sharpe_mv:.4f}",
+                    delta=f"{sharpe_diff:.1f}% {'better' if sharpe_diff > 0 else 'worse'} with Robust"
+                )
+            
+            with metric_cols[1]:
+                st.metric(
+                    label="Return-to-ES Comparison",
+                    value=f"{sortino_robust:.4f} vs {sortino_mv:.4f}",
+                    delta=f"{es_diff:.1f}% {'better' if es_diff > 0 else 'worse'} with Robust"
+                )
+                
+            with metric_cols[2]:
+                st.metric(
+                    label="Return-to-WEDS Comparison",
+                    value=f"{weds_ratio_robust:.4f} vs {weds_ratio_mv:.4f}",
+                    delta=f"{weds_diff:.1f}% {'better' if weds_diff > 0 else 'worse'} with Robust"
+                )
+        else:
+            with metric_cols[0]:
+                st.metric(
+                    label="Sharpe Ratio Comparison",
+                    value=f"{sharpe_robust:.4f} vs {sharpe_mv:.4f}",
+                    delta=f"{sharpe_diff:.1f}% {'better' if sharpe_diff > 0 else 'worse'} with Robust"
+                )
+            
+            with metric_cols[1]:
+                st.metric(
+                    label="Return-to-ES Comparison",
+                    value=f"{sortino_robust:.4f} vs {sortino_mv:.4f}",
+                    delta=f"{es_diff:.1f}% {'better' if es_diff > 0 else 'worse'} with Robust"
+                )
+                
+            with metric_cols[2]:
+                st.metric(
+                    label="Overall Assessment",
+                    value="See recommendation",
+                    delta=None
+                )
     
     with right_col:
-        # Efficient Frontier Plot
-        st.subheader("Efficient Frontier")
-        
-        # Add explanatory text about the efficient frontier
-        st.markdown("""
-        ### Understanding the Efficient Frontier Graph
-        
-        This graph shows the optimal portfolios that offer the highest expected return for a given level of risk:
-        
-        - **Each point** represents a portfolio with a different risk aversion level
-        - **X-axis (Volatility)**: Lower is better (less risk)
-        - **Y-axis (Expected Return)**: Higher is better (more return)
-        - **Upper left corner** has the most favorable risk-return tradeoff
-        """)
-        
-        # Create a larger figure for better visualization
-        fig, ax = plt.subplots(figsize=(12, 9))
-        
-        # Only plot if we have data points
-        if len(mv_vols) > 0 and len(robust_vols) > 0:
-            # Plot the efficient frontiers with smoother curves
-            ax.scatter(mv_vols, mv_returns, label="Traditional MV", color='blue', alpha=0.7, s=50)
-            ax.scatter(robust_vols, robust_returns, label="Wasserstein-Robust", color='orange', alpha=0.7, s=50)
-            
-            # Use scipy's interpolation for smoother curves
-            from scipy.interpolate import make_interp_spline
-            
-            # Only apply smoothing if we have enough points
-            if len(mv_vols) > 3:
-                # Create smooth curves for Traditional MV
-                mv_x_new = np.linspace(min(mv_vols), max(mv_vols), 300)
-                try:
-                    mv_spl = make_interp_spline(mv_vols, mv_returns, k=3)
-                    mv_y_new = mv_spl(mv_x_new)
-                    ax.plot(mv_x_new, mv_y_new, 'b-', alpha=0.6, linewidth=2)
-                except Exception:
-                    # Fall back to simple line if spline fails
-                    ax.plot(mv_vols, mv_returns, 'b-', alpha=0.6, linewidth=2)
-            else:
-                ax.plot(mv_vols, mv_returns, 'b-', alpha=0.6, linewidth=2)
-            
-            # Create smooth curves for Wasserstein-Robust
-            if len(robust_vols) > 3:
-                robust_x_new = np.linspace(min(robust_vols), max(robust_vols), 300)
-                try:
-                    robust_spl = make_interp_spline(robust_vols, robust_returns, k=3)
-                    robust_y_new = robust_spl(robust_x_new)
-                    ax.plot(robust_x_new, robust_y_new, 'orange', alpha=0.6, linewidth=2)
-                except Exception:
-                    # Fall back to simple line if spline fails
-                    ax.plot(robust_vols, robust_returns, 'orange', alpha=0.6, linewidth=2)
-            else:
-                ax.plot(robust_vols, robust_returns, 'orange', alpha=0.6, linewidth=2)
-            
-            # Highlight the minimum volatility portfolio for each approach
-            min_vol_idx_mv = np.argmin(mv_vols)
-            min_vol_idx_robust = np.argmin(robust_vols)
-            
-            ax.scatter([mv_vols[min_vol_idx_mv]], [mv_returns[min_vol_idx_mv]],
-                      color='blue', s=150, alpha=0.8, edgecolors='black', linewidth=2,
-                      label="Min Volatility (Traditional)")
-            ax.scatter([robust_vols[min_vol_idx_robust]], [robust_returns[min_vol_idx_robust]],
-                      color='orange', s=150, alpha=0.8, edgecolors='black', linewidth=2,
-                      label="Min Volatility (Robust)")
-            
-            # Add annotations in better positions
-            min_vol = min(mv_vols + robust_vols)
-            max_vol = max(mv_vols + robust_vols)
-            min_ret = min(mv_returns + robust_returns)
-            max_ret = max(mv_returns + robust_returns)
-            
-            # Position annotations outside the plot area
-            ax.annotate("Lower Risk",
-                       xy=(min_vol, (max_ret + min_ret)/2),
-                       xytext=(-80, 0),
-                       textcoords="offset points",
-                       fontsize=12,
-                       fontweight='bold',
-                       color='green',
-                       bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="green", alpha=0.8),
-                       arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=-.2", color='green'))
-            
-            ax.annotate("Higher Return",
-                       xy=((max_vol + min_vol)/2, max_ret),
-                       xytext=(0, 40),
-                       textcoords="offset points",
-                       fontsize=12,
-                       fontweight='bold',
-                       color='green',
-                       bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="green", alpha=0.8),
-                       arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=.2", color='green'))
-            
-            # Improve axis labels and styling
-            ax.set_xlabel("Volatility (Risk)", fontsize=14, fontweight='bold')
-            ax.set_ylabel("Expected Return", fontsize=14, fontweight='bold')
-            ax.grid(True, alpha=0.3)
-            ax.legend(fontsize=12, loc='best')
-            
-            # Add title
-            ax.set_title("Efficient Frontier: Risk-Return Tradeoff", fontsize=16, fontweight='bold')
-            
-            st.pyplot(fig, use_container_width=True)
+        # Create tabs for different visualizations
+        if include_sdf and 'WEDS' in mv_metrics and 'WEDS' in robust_metrics:
+            frontier_tab, sdf_tab = st.tabs(["Efficient Frontier", "SDF Analysis"])
         else:
-            st.error("Unable to generate efficient frontier. Try different parameters or data.")
+            frontier_tab = st.container()
+            
+        with frontier_tab:
+            # Efficient Frontier Plot
+            st.subheader("Efficient Frontier")
+            
+            # Add explanatory text about the efficient frontier
+            st.markdown("""
+            ### Understanding the Efficient Frontier Graph
+            
+            This graph shows the optimal portfolios that offer the highest expected return for a given level of risk:
+            
+            - **Each point** represents a portfolio with a different risk aversion level
+            - **X-axis (Volatility)**: Lower is better (less risk)
+            - **Y-axis (Expected Return)**: Higher is better (more return)
+            - **Upper left corner** has the most favorable risk-return tradeoff
+            """)
+            
+            # Create a larger figure for better visualization
+            fig, ax = plt.subplots(figsize=(12, 9))
+            
+            # Only plot if we have data points
+            if len(mv_vols) > 0 and len(robust_vols) > 0:
+                # Plot the efficient frontiers with smoother curves
+                ax.scatter(mv_vols, mv_returns, label="Traditional MV", color='blue', alpha=0.7, s=50)
+                ax.scatter(robust_vols, robust_returns, label="Wasserstein-Robust", color='orange', alpha=0.7, s=50)
+                
+                # Use scipy's interpolation for smoother curves
+                from scipy.interpolate import make_interp_spline
+                
+                # Only apply smoothing if we have enough points
+                if len(mv_vols) > 3:
+                    # Create smooth curves for Traditional MV
+                    mv_x_new = np.linspace(min(mv_vols), max(mv_vols), 300)
+                    try:
+                        mv_spl = make_interp_spline(mv_vols, mv_returns, k=3)
+                        mv_y_new = mv_spl(mv_x_new)
+                        ax.plot(mv_x_new, mv_y_new, 'b-', alpha=0.6, linewidth=2)
+                    except Exception:
+                        # Fall back to simple line if spline fails
+                        ax.plot(mv_vols, mv_returns, 'b-', alpha=0.6, linewidth=2)
+                else:
+                    ax.plot(mv_vols, mv_returns, 'b-', alpha=0.6, linewidth=2)
+                
+                # Create smooth curves for Wasserstein-Robust
+                if len(robust_vols) > 3:
+                    robust_x_new = np.linspace(min(robust_vols), max(robust_vols), 300)
+                    try:
+                        robust_spl = make_interp_spline(robust_vols, robust_returns, k=3)
+                        robust_y_new = robust_spl(robust_x_new)
+                        ax.plot(robust_x_new, robust_y_new, 'orange', alpha=0.6, linewidth=2)
+                    except Exception:
+                        # Fall back to simple line if spline fails
+                        ax.plot(robust_vols, robust_returns, 'orange', alpha=0.6, linewidth=2)
+                else:
+                    ax.plot(robust_vols, robust_returns, 'orange', alpha=0.6, linewidth=2)
+                
+                # Highlight the minimum volatility portfolio for each approach
+                min_vol_idx_mv = np.argmin(mv_vols)
+                min_vol_idx_robust = np.argmin(robust_vols)
+                
+                ax.scatter([mv_vols[min_vol_idx_mv]], [mv_returns[min_vol_idx_mv]],
+                          color='blue', s=150, alpha=0.8, edgecolors='black', linewidth=2,
+                          label="Min Volatility (Traditional)")
+                ax.scatter([robust_vols[min_vol_idx_robust]], [robust_returns[min_vol_idx_robust]],
+                          color='orange', s=150, alpha=0.8, edgecolors='black', linewidth=2,
+                          label="Min Volatility (Robust)")
+                
+                # Add annotations in better positions
+                min_vol = min(mv_vols + robust_vols)
+                max_vol = max(mv_vols + robust_vols)
+                min_ret = min(mv_returns + robust_returns)
+                max_ret = max(mv_returns + robust_returns)
+                
+                # Position annotations outside the plot area
+                ax.annotate("Lower Risk",
+                           xy=(min_vol, (max_ret + min_ret)/2),
+                           xytext=(-80, 0),
+                           textcoords="offset points",
+                           fontsize=12,
+                           fontweight='bold',
+                           color='green',
+                           bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="green", alpha=0.8),
+                           arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=-.2", color='green'))
+                
+                ax.annotate("Higher Return",
+                           xy=((max_vol + min_vol)/2, max_ret),
+                           xytext=(0, 40),
+                           textcoords="offset points",
+                           fontsize=12,
+                           fontweight='bold',
+                           color='green',
+                           bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="green", alpha=0.8),
+                           arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=.2", color='green'))
+                
+                # Improve axis labels and styling
+                ax.set_xlabel("Volatility (Risk)", fontsize=14, fontweight='bold')
+                ax.set_ylabel("Expected Return", fontsize=14, fontweight='bold')
+                ax.grid(True, alpha=0.3)
+                ax.legend(fontsize=12, loc='best')
+                
+                # Add title
+                ax.set_title("Efficient Frontier: Risk-Return Tradeoff", fontsize=16, fontweight='bold')
+                
+                st.pyplot(fig, use_container_width=True)
+            else:
+                st.error("Unable to generate efficient frontier. Try different parameters or data.")
+        
+        # SDF Analysis Tab
+        if include_sdf and 'WEDS' in mv_metrics and 'WEDS' in robust_metrics:
+            with sdf_tab:
+                st.subheader("Stochastic Discount Factor (SDF) Analysis")
+                
+                st.markdown("""
+                ### Understanding the SDF
+                
+                The **Stochastic Discount Factor (SDF)** is a key concept in asset pricing that:
+                
+                - Discounts future cash flows based on economic conditions
+                - Assigns higher weights to returns in "bad" market states
+                - Helps assess how portfolios perform in different market environments
+                
+                The visualizations below show how the SDF affects portfolio evaluation:
+                """)
+                
+                # Plot SDF over time
+                st.subheader("Stochastic Discount Factor")
+                fig_sdf = plot_sdf(mv_metrics['SDF'])
+                st.pyplot(fig_sdf, use_container_width=True)
+                
+                # Plot return distributions
+                st.subheader("Return Distributions")
+                
+                # Traditional MV
+                st.markdown("#### Traditional Mean-Variance Portfolio")
+                fig_dist_mv = plot_returns_distribution(
+                    mv_metrics['Portfolio Returns'],
+                    mv_metrics['Discounted Returns']
+                )
+                st.pyplot(fig_dist_mv, use_container_width=True)
+                
+                # Robust
+                st.markdown("#### Wasserstein-Robust Portfolio")
+                fig_dist_robust = plot_returns_distribution(
+                    robust_metrics['Portfolio Returns'],
+                    robust_metrics['Discounted Returns']
+                )
+                st.pyplot(fig_dist_robust, use_container_width=True)
+                
+                # Risk comparison
+                st.subheader("Risk Measure Comparison")
+                fig_risk = plot_risk_comparison(
+                    [mv_metrics['ES'], robust_metrics['ES']],
+                    [mv_metrics['WEDS'], robust_metrics['WEDS']],
+                    ["Traditional MV", "Wasserstein-Robust"]
+                )
+                st.pyplot(fig_risk, use_container_width=True)
+                
+                # Add explanation
+                st.markdown("""
+                ### Key Insights from SDF Analysis
+                
+                - **WEDS vs. ES**: The WEDS is typically higher than ES because it accounts for the correlation between portfolio returns and market conditions
+                - **Discounted Returns**: The SDF-discounted returns show how the portfolio would perform when adjusted for market risk
+                - **Strategy Comparison**: The gap between WEDS and ES indicates how sensitive each strategy is to market conditions
+                
+                The Wasserstein-Robust strategy typically shows less sensitivity to market conditions, making it more resilient during market stress.
+                """)
 
 if __name__ == "__main__":
     main()
