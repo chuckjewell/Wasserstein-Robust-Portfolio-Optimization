@@ -665,6 +665,65 @@ def main():
         # Strategy Evaluation with enhanced visuals
         st.subheader("Strategy Evaluation")
         
+        # Add data summary section
+        with st.expander("📊 Data Summary", expanded=True):
+            # Get asset names
+            asset_names = st.session_state.get('tickers_list', [f"Asset {i+1}" for i in range(len(w_mv))])
+            
+            # Calculate basic stats for each asset
+            if returns is not None and len(returns) > 0:
+                asset_stats = []
+                for i in range(returns.shape[1]):
+                    asset_return = returns[:, i]
+                    stats = {
+                        "Asset": asset_names[i],
+                        "Mean Return": np.mean(asset_return),
+                        "Volatility": np.std(asset_return),
+                        "Min": np.min(asset_return),
+                        "Max": np.max(asset_return),
+                        "Skewness": 0 if len(asset_return) < 3 else np.mean(((asset_return - np.mean(asset_return)) / np.std(asset_return))**3),
+                        "Kurtosis": 0 if len(asset_return) < 4 else np.mean(((asset_return - np.mean(asset_return)) / np.std(asset_return))**4) - 3
+                    }
+                    asset_stats.append(stats)
+                
+                # Create a DataFrame for the stats
+                stats_df = pd.DataFrame(asset_stats)
+                
+                # Format the numbers
+                for col in stats_df.columns:
+                    if col != "Asset" and stats_df[col].dtype in [np.float64, np.float32]:
+                        stats_df[col] = stats_df[col].map(lambda x: f"{x:.4f}")
+                
+                # Display the stats
+                st.markdown("### Asset Statistics")
+                st.dataframe(stats_df, use_container_width=True, hide_index=True)
+                
+                # Calculate correlation matrix
+                corr_matrix = np.corrcoef(returns.T)
+                corr_df = pd.DataFrame(corr_matrix, columns=asset_names, index=asset_names)
+                
+                # Display correlation matrix
+                st.markdown("### Correlation Matrix")
+                st.dataframe(corr_df.style.background_gradient(cmap='coolwarm', axis=None), use_container_width=True)
+                
+                # Add description of the data
+                st.markdown(f"""
+                ### Data Description
+                
+                - **Number of Assets**: {returns.shape[1]}
+                - **Number of Observations**: {returns.shape[0]}
+                - **Time Period**: {st.session_state.get('period', 'Custom')}
+                - **Training/Testing Split**: {train_ratio*100:.0f}% / {(1-train_ratio)*100:.0f}%
+                - **Test Distribution**: {test_dist}
+                
+                The data shows {'high' if np.mean(np.abs(corr_matrix - np.eye(len(corr_matrix)))) > 0.3 else 'moderate' if np.mean(np.abs(corr_matrix - np.eye(len(corr_matrix)))) > 0.15 else 'low'} correlation between assets,
+                which {'supports' if np.mean(np.abs(corr_matrix - np.eye(len(corr_matrix)))) > 0.15 else 'limits'} the benefits of diversification.
+                
+                The assets display {'high' if np.mean([s['Volatility'] for s in asset_stats]) > 0.02 else 'moderate' if np.mean([s['Volatility'] for s in asset_stats]) > 0.01 else 'low'} volatility,
+                with {'significant' if np.any([abs(float(s['Skewness'])) > 0.5 for s in asset_stats]) else 'some' if np.any([abs(float(s['Skewness'])) > 0.2 for s in asset_stats]) else 'minimal'} skewness
+                and {'fat tails' if np.any([float(s['Kurtosis']) > 1.0 for s in asset_stats]) else 'near-normal tails'}.
+                """)
+        
         # Create a visually appealing recommendation box
         recommendation_type = ""
         if "Wasserstein-Robust strategy" in recommendation:
