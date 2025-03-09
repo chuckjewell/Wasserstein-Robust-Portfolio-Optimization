@@ -117,16 +117,39 @@ def main():
     
     st.title("Wasserstein-Robust Portfolio Optimization")
     
-    # Add a brief introduction with usage instructions
+    # Add a brief introduction
     st.markdown("""
     This app helps you compare traditional and robust portfolio optimization strategies.
-    
-    **How to use this app:**
-    1. Select a data source (Stock Data, Upload CSV, or Generate Synthetic)
-    2. Adjust the parameters to see how they affect the optimal portfolio
-    3. Compare the performance metrics and portfolio weights
-    4. Examine the efficient frontier graph to understand the risk-return tradeoff
     """)
+    
+    # Add usage instructions in an expander
+    with st.expander("📋 How to use this app", expanded=False):
+        st.markdown("""
+        ### Getting Started
+        
+        1. **Select a data source**:
+           - **Stock Data**: Enter ticker symbols (e.g., SPY, AAPL) to fetch real market data
+           - **Upload CSV**: Upload your own returns data in CSV format
+           - **Generate Synthetic**: Create simulated market data for testing
+        
+        2. **Adjust parameters**:
+           - **Risk aversion (γ)**: Controls the trade-off between risk and return
+           - **Wasserstein radius (ε)**: Controls the level of robustness
+           - **Confidence level (α)**: Used for Expected Shortfall calculation
+           - **No short selling**: Restricts to long-only positions
+           - **Include SDF Analysis**: Enables advanced risk assessment
+        
+        3. **Analyze results**:
+           - Compare portfolio weights and performance metrics
+           - Examine the efficient frontier graph
+           - Review the strategy evaluation and recommendation
+        
+        ### Tips
+        
+        - Use the expandable sections to view detailed information
+        - Try different parameter combinations to see how they affect the portfolios
+        - Enable SDF Analysis for more comprehensive risk assessment
+        """)
 
     # --- Sidebar: User Inputs ---
     st.sidebar.header("Input Data")
@@ -306,39 +329,46 @@ def main():
     # Apply the selected test data distribution
     # Note: This applies to both real and synthetic data - we're using the statistical properties
     # of the training data to generate new test scenarios
-    st.info(f"""
-    ### How Test Data is Used
-    
-    Even when using real market data, we split it into:
-    - **Training data ({train_ratio*100:.0f}%)**: Used to estimate parameters and optimize portfolios
-    - **Test data ({(1-train_ratio)*100:.0f}%)**: Used to evaluate how portfolios would perform out-of-sample
-    
-    The **Test Distribution** option controls how this test data is modified:
-    """)
-    
-    if test_dist == "T-Distribution":
-        # Create a notification to explain what's happening
-        st.info("""
-        **Using T-Distribution**: We're taking your real data and making it more extreme to simulate market stress.
+    with st.expander(f"ℹ️ How Test Data is Used ({train_ratio*100:.0f}% train / {(1-train_ratio)*100:.0f}% test)", expanded=False):
+        st.markdown(f"""
+        ### Data Splitting Process
         
-        This transforms the actual test data to have more frequent and severe market movements (both up and down).
-        It's like asking "How would my portfolio perform if market conditions were more volatile than what we've seen?"
+        Even when using real market data, we split it into:
+        - **Training data ({train_ratio*100:.0f}%)**: Used to estimate parameters and optimize portfolios
+        - **Test data ({(1-train_ratio)*100:.0f}%)**: Used to evaluate how portfolios would perform out-of-sample
+        
+        ### Test Distribution Options
+        
+        The **Test Distribution** option controls how this test data is modified:
+        
+        #### Normal Distribution
+        - Uses your actual test data without modification
+        - Assumes historical data is representative of future market conditions
+        - Answers: "How would my portfolio perform if future conditions are similar to what we've seen?"
+        
+        #### T-Distribution
+        - Takes your real data and makes it more extreme to simulate market stress
+        - Creates more frequent and severe market movements (both up and down)
+        - Answers: "How would my portfolio perform if market conditions were more volatile?"
+        
+        ### Current Setting
+        
+        You are currently using the **{test_dist}** for testing.
         """)
-        
+    
+    # Apply the selected distribution
+    if test_dist == "T-Distribution":
         # Simulate fat-tailed test data using multivariate t-distribution
         df = 3  # Degrees of freedom (lower = fatter tails = more extreme events)
         original_test_returns = test_returns.copy()  # Save original for comparison
         test_returns = multivariate_t.rvs(shape=np.cov(train_returns, rowvar=False),
                                           df=df, size=len(test_returns))
-    else:
-        # Normal distribution (default)
-        st.info("""
-        **Using Normal Distribution**: We're using the actual test data without modification.
         
-        This assumes the historical data in your test set is representative of future market conditions.
-        It's like asking "How would my portfolio perform if future market conditions are similar to what we've seen?"
-        """)
-        # We're already using the original test data which is assumed to be normally distributed
+        # Add a small indicator that T-Distribution is being used
+        st.info("Using **T-Distribution** for test data (more extreme market movements)")
+    else:
+        # Add a small indicator that Normal Distribution is being used
+        st.info("Using **Normal Distribution** for test data (original market movements)")
 
     mu_hat, Sigma_hat = estimate_parameters(train_returns)
 
@@ -487,125 +517,150 @@ def main():
     left_col, right_col = st.columns([1, 1.5])
     
     with left_col:
-        # Portfolio weights
-        st.subheader("Portfolio Weights")
-        weights_df = pd.DataFrame({
-            "Traditional MV": w_mv.round(4),
-            "Wasserstein-Robust": w_robust.round(4)
-        })
-        
-        # Add asset names from session state if available
-        if st.session_state.get('tickers_list') is not None:
-            if len(st.session_state.tickers_list) == weights_df.shape[0]:
-                weights_df.index = st.session_state.tickers_list
-            
-        st.dataframe(weights_df, use_container_width=True)
-        
-        # Performance metrics
-        st.subheader("Performance Metrics")
-        
-        # Create metrics dataframe based on whether SDF analysis is included
-        if include_sdf and 'WEDS' in mv_metrics and 'WEDS' in robust_metrics:
-            metrics_df = pd.DataFrame({
-                "Metric": ["Expected Return", "Volatility", f"Expected Shortfall (α={alpha})", "WEDS"],
-                "Traditional MV": [
-                    f"{mv_metrics['Expected Return']:.4f}",
-                    f"{mv_metrics['Volatility']:.4f}",
-                    f"{mv_metrics['ES']:.4f}",
-                    f"{mv_metrics['WEDS']:.4f}"
-                ],
-                "Wasserstein-Robust": [
-                    f"{robust_metrics['Expected Return']:.4f}",
-                    f"{robust_metrics['Volatility']:.4f}",
-                    f"{robust_metrics['ES']:.4f}",
-                    f"{robust_metrics['WEDS']:.4f}"
-                ]
+        # Create expandable sections for detailed metrics
+        with st.expander("📊 Portfolio Weights", expanded=False):
+            weights_df = pd.DataFrame({
+                "Traditional MV": w_mv.round(4),
+                "Wasserstein-Robust": w_robust.round(4)
             })
             
-            # Add explanation of WEDS
-            st.markdown("""
-            **Risk Measures Explained:**
-            - **Expected Shortfall (ES)**: Average loss in the worst α% of scenarios
-            - **WEDS**: Wasserstein Expected Discounted Shortfall - ES adjusted by the Stochastic Discount Factor (SDF)
+            # Add asset names from session state if available
+            if st.session_state.get('tickers_list') is not None:
+                if len(st.session_state.tickers_list) == weights_df.shape[0]:
+                    weights_df.index = st.session_state.tickers_list
+                
+            st.dataframe(weights_df, use_container_width=True)
             
-            WEDS provides a more comprehensive risk assessment by accounting for market conditions and their correlation with portfolio returns.
-            """)
-        else:
-            metrics_df = pd.DataFrame({
-                "Metric": ["Expected Return", "Volatility", f"Expected Shortfall (α={alpha})"],
-                "Traditional MV": [
-                    f"{mv_metrics['Expected Return']:.4f}",
-                    f"{mv_metrics['Volatility']:.4f}",
-                    f"{mv_metrics['ES']:.4f}"
-                ],
-                "Wasserstein-Robust": [
-                    f"{robust_metrics['Expected Return']:.4f}",
-                    f"{robust_metrics['Volatility']:.4f}",
-                    f"{robust_metrics['ES']:.4f}"
-                ]
-            })
-            
-            # Add note about risk measure simplification
+            # Add explanation about weights
             st.markdown("""
-            **Note**: The risk measure used here is the standard Expected Shortfall (ES). For more advanced analysis, enable the SDF Analysis option in the sidebar to calculate the Wasserstein Expected Discounted Shortfall (WEDS), which incorporates the Stochastic Discount Factor (SDF) and distributional robustness.
+            **Understanding Portfolio Weights:**
+            - Values represent the proportion of capital allocated to each asset
+            - Weights sum to 1.0 (100% of portfolio)
+            - Positive values indicate long positions
+            - Negative values (if present) indicate short positions
             """)
         
-        st.dataframe(metrics_df, use_container_width=True, hide_index=True)
-        
-        # Evaluation metrics
-        st.subheader("Evaluation Metrics")
-        
-        if include_sdf and 'WEDS' in mv_metrics and 'WEDS' in robust_metrics:
-            # Calculate WEDS-based ratios
-            weds_ratio_mv = mv_metrics['Expected Return'] / mv_metrics['WEDS']
-            weds_ratio_robust = robust_metrics['Expected Return'] / robust_metrics['WEDS']
+        with st.expander("📈 Performance Metrics", expanded=False):
+            # Create metrics dataframe based on whether SDF analysis is included
+            if include_sdf and 'WEDS' in mv_metrics and 'WEDS' in robust_metrics:
+                metrics_df = pd.DataFrame({
+                    "Metric": ["Expected Return", "Volatility", f"Expected Shortfall (α={alpha})", "WEDS"],
+                    "Traditional MV": [
+                        f"{mv_metrics['Expected Return']:.4f}",
+                        f"{mv_metrics['Volatility']:.4f}",
+                        f"{mv_metrics['ES']:.4f}",
+                        f"{mv_metrics['WEDS']:.4f}"
+                    ],
+                    "Wasserstein-Robust": [
+                        f"{robust_metrics['Expected Return']:.4f}",
+                        f"{robust_metrics['Volatility']:.4f}",
+                        f"{robust_metrics['ES']:.4f}",
+                        f"{robust_metrics['WEDS']:.4f}"
+                    ]
+                })
+                
+                # Add explanation of WEDS
+                st.markdown("""
+                **Risk Measures Explained:**
+                - **Expected Return**: Average portfolio return based on historical data
+                - **Volatility**: Standard deviation of returns (measure of risk)
+                - **Expected Shortfall (ES)**: Average loss in the worst α% of scenarios
+                - **WEDS**: Wasserstein Expected Discounted Shortfall - ES adjusted by the Stochastic Discount Factor (SDF)
+                
+                WEDS provides a more comprehensive risk assessment by accounting for market conditions and their correlation with portfolio returns.
+                """)
+            else:
+                metrics_df = pd.DataFrame({
+                    "Metric": ["Expected Return", "Volatility", f"Expected Shortfall (α={alpha})"],
+                    "Traditional MV": [
+                        f"{mv_metrics['Expected Return']:.4f}",
+                        f"{mv_metrics['Volatility']:.4f}",
+                        f"{mv_metrics['ES']:.4f}"
+                    ],
+                    "Wasserstein-Robust": [
+                        f"{robust_metrics['Expected Return']:.4f}",
+                        f"{robust_metrics['Volatility']:.4f}",
+                        f"{robust_metrics['ES']:.4f}"
+                    ]
+                })
+                
+                # Add note about risk measure simplification
+                st.markdown("""
+                **Risk Measures Explained:**
+                - **Expected Return**: Average portfolio return based on historical data
+                - **Volatility**: Standard deviation of returns (measure of risk)
+                - **Expected Shortfall (ES)**: Average loss in the worst α% of scenarios
+                
+                **Note**: For more advanced analysis, enable the SDF Analysis option in the sidebar to calculate the Wasserstein Expected Discounted Shortfall (WEDS), which incorporates the Stochastic Discount Factor (SDF) and distributional robustness.
+                """)
             
-            eval_df = pd.DataFrame({
-                "Metric": ["Sharpe Ratio", "Return-to-ES Ratio", "Return-to-WEDS Ratio"],
-                "Traditional MV": [
-                    f"{sharpe_mv:.4f}",
-                    f"{sortino_mv:.4f}",
-                    f"{weds_ratio_mv:.4f}"
-                ],
-                "Wasserstein-Robust": [
-                    f"{sharpe_robust:.4f}",
-                    f"{sortino_robust:.4f}",
-                    f"{weds_ratio_robust:.4f}"
-                ]
-            })
+            st.dataframe(metrics_df, use_container_width=True, hide_index=True)
+        
+        with st.expander("⚖️ Evaluation Metrics", expanded=False):
+            if include_sdf and 'WEDS' in mv_metrics and 'WEDS' in robust_metrics:
+                # Calculate WEDS-based ratios
+                weds_ratio_mv = mv_metrics['Expected Return'] / mv_metrics['WEDS']
+                weds_ratio_robust = robust_metrics['Expected Return'] / robust_metrics['WEDS']
+                
+                eval_df = pd.DataFrame({
+                    "Metric": ["Sharpe Ratio", "Return-to-ES Ratio", "Return-to-WEDS Ratio"],
+                    "Traditional MV": [
+                        f"{sharpe_mv:.4f}",
+                        f"{sortino_mv:.4f}",
+                        f"{weds_ratio_mv:.4f}"
+                    ],
+                    "Wasserstein-Robust": [
+                        f"{sharpe_robust:.4f}",
+                        f"{sortino_robust:.4f}",
+                        f"{weds_ratio_robust:.4f}"
+                    ]
+                })
+                
+                # Add explanation of WEDS ratio
+                st.markdown("""
+                **Evaluation Metrics Explained:**
+                - **Sharpe Ratio**: Return per unit of volatility (higher is better)
+                - **Return-to-ES Ratio**: Return per unit of tail risk measured by ES (higher is better)
+                - **Return-to-WEDS Ratio**: Return per unit of SDF-adjusted tail risk (higher is better)
+                
+                The Return-to-WEDS Ratio provides a more comprehensive assessment of risk-adjusted performance by accounting for market conditions.
+                """)
+            else:
+                eval_df = pd.DataFrame({
+                    "Metric": ["Sharpe Ratio", "Return-to-ES Ratio"],
+                    "Traditional MV": [f"{sharpe_mv:.4f}", f"{sortino_mv:.4f}"],
+                    "Wasserstein-Robust": [f"{sharpe_robust:.4f}", f"{sortino_robust:.4f}"]
+                })
+                
+                # Add explanation of ratios
+                st.markdown("""
+                **Evaluation Metrics Explained:**
+                - **Sharpe Ratio**: Return per unit of volatility (higher is better)
+                - **Return-to-ES Ratio**: Return per unit of tail risk measured by ES (higher is better)
+                """)
             
-            # Add explanation of WEDS ratio
+            st.dataframe(eval_df, use_container_width=True, hide_index=True)
+        
+        # Key Insights in an expander
+        with st.expander("🔑 Key Insights", expanded=False):
             st.markdown("""
-            **Evaluation Metrics Explained:**
-            - **Sharpe Ratio**: Return per unit of volatility (higher is better)
-            - **Return-to-ES Ratio**: Return per unit of tail risk measured by ES (higher is better)
-            - **Return-to-WEDS Ratio**: Return per unit of SDF-adjusted tail risk (higher is better)
+            ### Performance Metrics Explained
             
-            The Return-to-WEDS Ratio provides a more comprehensive assessment of risk-adjusted performance by accounting for market conditions.
+            - **Sharpe Ratio**: Higher is better, measures return per unit of risk
+            - **Return-to-ES Ratio**: Higher is better, measures return per unit of tail risk
+            
+            ### Strategy Characteristics
+            
+            - **Traditional optimization** typically shows higher expected returns but may underestimate risks
+            - **Robust optimization** produces more conservative portfolios that may perform better in volatile markets
+            - The **gap between the curves** on the efficient frontier represents the "cost of robustness"
+            
+            ### When to Use Each Strategy
+            
+            - **Traditional Mean-Variance**: Best for stable markets with reliable return estimates
+            - **Wasserstein-Robust**: Best for volatile markets or when return estimates are uncertain
+            - **Balanced Approach**: Allocate to both strategies for a more diversified portfolio
             """)
-        else:
-            eval_df = pd.DataFrame({
-                "Metric": ["Sharpe Ratio", "Return-to-ES Ratio"],
-                "Traditional MV": [f"{sharpe_mv:.4f}", f"{sortino_mv:.4f}"],
-                "Wasserstein-Robust": [f"{sharpe_robust:.4f}", f"{sortino_robust:.4f}"]
-            })
-        
-        st.dataframe(eval_df, use_container_width=True, hide_index=True)
-        
-        # Key Insights (stacked vertically)
-        st.subheader("Key Insights")
-        st.markdown("""
-        ### Performance Metrics Explained
-        
-        - **Sharpe Ratio**: Higher is better, measures return per unit of risk
-        - **Return-to-ES Ratio**: Higher is better, measures return per unit of tail risk
-        
-        ### Strategy Characteristics
-        
-        - **Traditional optimization** typically shows higher expected returns but may underestimate risks
-        - **Robust optimization** produces more conservative portfolios that may perform better in volatile markets
-        - The **gap between the curves** on the efficient frontier represents the "cost of robustness"
-        """)
         
         # Strategy Evaluation with enhanced visuals
         st.subheader("Strategy Evaluation")
@@ -761,17 +816,25 @@ def main():
             # Efficient Frontier Plot
             st.subheader("Efficient Frontier")
             
-            # Add explanatory text about the efficient frontier
-            st.markdown("""
-            ### Understanding the Efficient Frontier Graph
-            
-            This graph shows the optimal portfolios that offer the highest expected return for a given level of risk:
-            
-            - **Each point** represents a portfolio with a different risk aversion level
-            - **X-axis (Volatility)**: Lower is better (less risk)
-            - **Y-axis (Expected Return)**: Higher is better (more return)
-            - **Upper left corner** has the most favorable risk-return tradeoff
-            """)
+            # Add explanatory text about the efficient frontier in an expander
+            with st.expander("ℹ️ Understanding the Efficient Frontier", expanded=False):
+                st.markdown("""
+                ### Understanding the Efficient Frontier Graph
+                
+                This graph shows the optimal portfolios that offer the highest expected return for a given level of risk:
+                
+                - **Each point** represents a portfolio with a different risk aversion level
+                - **X-axis (Volatility)**: Lower is better (less risk)
+                - **Y-axis (Expected Return)**: Higher is better (more return)
+                - **Upper left corner** has the most favorable risk-return tradeoff
+                
+                ### How to Interpret the Curves
+                
+                - **Blue curve (Traditional)**: Shows the traditional mean-variance efficient frontier
+                - **Orange curve (Robust)**: Shows the Wasserstein-robust efficient frontier
+                - **The gap between curves**: Represents the "cost of robustness" - how much expected return you sacrifice for greater stability
+                - **Minimum volatility points**: The lowest risk portfolio for each approach (marked with larger points)
+                """)
             
             # Create a larger figure for better visualization
             fig, ax = plt.subplots(figsize=(12, 9))
@@ -922,6 +985,46 @@ def main():
                 - **Strategy Comparison**: The gap between WEDS and ES indicates how sensitive each strategy is to market conditions
                 
                 The Wasserstein-Robust strategy typically shows less sensitivity to market conditions, making it more resilient during market stress.
+                """)
+                
+            # Add a new section explaining why the strategy is successful
+            with st.expander("🔍 Why is this strategy successful?", expanded=True):
+                st.markdown("""
+                ### Why the Wasserstein-Robust Strategy Succeeds
+                
+                The Wasserstein-Robust strategy is successful in this scenario for several key reasons:
+                
+                1. **Accounts for Uncertainty**: The robust approach explicitly accounts for uncertainty in return estimates, which traditional methods ignore.
+                
+                2. **Protects Against Worst-Case Scenarios**: By adding the Wasserstein penalty term (ε * ||w||₂), the optimization creates portfolios that perform better under adverse market conditions.
+                
+                3. **Reduces Estimation Error Impact**: Traditional optimization often amplifies estimation errors, while robust methods dampen their effects.
+                
+                ### What the Efficient Frontier Graph Shows
+                
+                Looking at the efficient frontier graph:
+                
+                - The **blue curve** (Traditional) typically extends further up and to the right, showing higher potential returns but also higher risk
+                - The **orange curve** (Robust) is often more conservative, with a smaller range of risk-return combinations
+                - The **gap between curves** represents the "price of robustness" - what you give up in expected return to gain protection
+                - The **minimum volatility points** (larger dots) show the lowest-risk portfolios for each approach
+                
+                In this case, the Robust strategy's frontier indicates it achieves better risk-adjusted returns (higher Sharpe ratio, Return-to-ES ratio, and Return-to-WEDS ratio). This suggests the robust approach is finding more efficient portfolios by avoiding positions that might perform well on average but could suffer severely in adverse scenarios.
+                
+                ### Mathematical Intuition
+                
+                Mathematically, the Wasserstein-robust approach adds a regularization term to the optimization:
+                
+                ```
+                min  -μᵀw + (γ/2)wᵀΣw + ε||w||₂
+                ```
+                
+                This regularization:
+                - Penalizes extreme weights
+                - Promotes diversification
+                - Reduces sensitivity to input parameters
+                
+                The result is a portfolio that sacrifices some expected return for significantly improved stability and resilience.
                 """)
 
 if __name__ == "__main__":
