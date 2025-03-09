@@ -474,6 +474,11 @@ def main():
         })
         st.dataframe(metrics_df, use_container_width=True, hide_index=True)
         
+        # Add note about risk measure simplification
+        st.markdown("""
+        **Note**: The risk measure used here is the standard Expected Shortfall (ES). In the full theoretical framework, the Wasserstein Expected Discounted Shortfall (WEDS) is employed, incorporating the Stochastic Discount Factor (SDF) and distributional robustness. For computational simplicity, this implementation uses ES as an approximation.
+        """)
+        
         # Evaluation metrics
         eval_df = pd.DataFrame({
             "Metric": ["Sharpe Ratio", "Return-to-ES Ratio"],

@@ -1,6 +1,7 @@
 import numpy as np
 import cvxpy as cp
 from scipy.stats import norm
+import streamlit as st  # Added for sidebar warnings
 
 def generate_data(n_assets=3, n_samples=1000, seed=42):
     """
@@ -37,29 +38,34 @@ def estimate_parameters(returns):
     - mu_hat: Estimated mean vector.
     - Sigma_hat: Estimated covariance matrix.
     """
-    # Handle NaN values
-    returns_clean = np.nan_to_num(returns, nan=0.0)
+    # Remove rows with any NaN values
+    returns_clean = returns[~np.isnan(returns).any(axis=1)]
+    n_samples, n_assets = returns_clean.shape
     
-    # Ensure we have enough data
-    if returns_clean.shape[0] < 2:
-        # If not enough data, create synthetic data
-        n_assets = returns_clean.shape[1]
-        returns_clean = generate_data(n_assets, 1000)
+    # Check for sufficient data
+    if n_samples < 2:
+        raise ValueError("Insufficient data: at least 2 samples are required after removing NaNs.")
+    if n_samples < 30 * n_assets:
+        st.sidebar.warning(f"Warning: Only {n_samples} samples for {n_assets} assets. Low sample size may lead to unreliable estimates (recommend ≥ {30 * n_assets} samples).")
     
+    # Estimate mean and covariance
     mu_hat = np.mean(returns_clean, axis=0)
-    
-    # Calculate covariance matrix and ensure it's symmetric
     Sigma_hat = np.cov(returns_clean, rowvar=False)
     
-    # Force symmetry by averaging with its transpose
-    Sigma_hat = (Sigma_hat + Sigma_hat.T) / 2
+    # Apply shrinkage to covariance matrix for robustness
+    shrinkage = 0.1  # Shrinkage intensity (0 to 1)
+    trace_Sigma = np.trace(Sigma_hat)
+    Sigma_shrunk = (1 - shrinkage) * Sigma_hat + shrinkage * np.eye(n_assets) * (trace_Sigma / n_assets)
     
-    # Ensure positive definiteness by adding a small value to the diagonal if needed
-    min_eig = np.min(np.linalg.eigvals(Sigma_hat))
+    # Ensure symmetry
+    Sigma_shrunk = (Sigma_shrunk + Sigma_shrunk.T) / 2
+    
+    # Ensure positive definiteness
+    min_eig = np.min(np.linalg.eigvals(Sigma_shrunk))
     if min_eig < 1e-6:
-        Sigma_hat += np.eye(Sigma_hat.shape[0]) * (1e-6 - min_eig)
+        Sigma_shrunk += np.eye(n_assets) * (1e-6 - min_eig)
     
-    return mu_hat, Sigma_hat
+    return mu_hat, Sigma_shrunk
 
 def mean_variance_optimization(mu, Sigma, gamma, no_short=True):
     """
