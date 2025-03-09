@@ -24,7 +24,7 @@ SP500_STOCKS = [
     "CI", "CB", "PGR", "DUK", "SLB", "ITW", "APD", "BSX", "TGT", "AON"
 ]
 
-# Initialize session state for preserving UI state
+# Initialize session state for preserving UI state and data
 if 'no_short_selling' not in st.session_state:
     st.session_state.no_short_selling = True
 if 'gamma' not in st.session_state:
@@ -37,6 +37,14 @@ if 'train_ratio' not in st.session_state:
     st.session_state.train_ratio = 0.5
 if 'test_dist' not in st.session_state:
     st.session_state.test_dist = "Normal"
+    
+# Store data in session state
+if 'returns_data' not in st.session_state:
+    st.session_state.returns_data = None
+if 'data_loaded' not in st.session_state:
+    st.session_state.data_loaded = False
+if 'data_option' not in st.session_state:
+    st.session_state.data_option = "Stock Data"
 
 def fetch_stockdex_data(tickers, period='1y'):
     """Fetch stock data using stockdex library"""
@@ -119,96 +127,132 @@ def main():
 
     # --- Sidebar: User Inputs ---
     st.sidebar.header("Input Data")
-    data_option = st.sidebar.radio("Data Source:", ["Stock Data", "Upload CSV", "Generate Synthetic"])
-
-    if data_option == "Stock Data":
-        st.sidebar.subheader("Stock Data")
-        
-        # Add info about the data source
-        st.sidebar.info("Using StockDex library to fetch stock data.")
-        
-        # Add a button to randomize stocks
-        if st.sidebar.button("🎲 Randomize (5 S&P 500 Stocks)"):
-            random_tickers = " ".join(random.sample(SP500_STOCKS, 5))
-            st.session_state.tickers_input = random_tickers
-        
-        # Default to ETFs that are more likely to work, but use session state if available
-        tickers_input = st.sidebar.text_area(
-            "Enter ticker symbols (space separated)",
-            value=st.session_state.get('tickers_input', "SPY QQQ DIA"),
-            help="Example: SPY QQQ DIA IWM XLF (ETFs tend to be more reliable)",
-            key="tickers_input"
-        )
-        
-        period = st.sidebar.selectbox(
-            "Period",
-            ["1mo", "3mo", "6mo", "1y", "2y", "5y", "max"],
-            index=2,
-            help="Data period to download",
-            key="period"
-        )
-        
-        if st.sidebar.button("Fetch Data"):
-            with st.spinner("Fetching stock data..."):
-                # Show data preview section
-                data_preview = st.empty()
-                
-                # Fetch data with detailed debugging
-                returns_df = fetch_stockdex_data(tickers_input, period)
-                
-                # Check if we got valid data
-                if returns_df.empty:
-                    st.error("Failed to fetch valid data. Please check the API Debug Info in the sidebar for details.")
-                    
-                    # Provide clear suggestions in a more structured format
-                    suggestion_col1, suggestion_col2 = st.columns(2)
-                    with suggestion_col1:
-                        st.info("### Troubleshooting Suggestions:")
-                        st.markdown("""
-                        - Try using ETFs like SPY, QQQ, DIA instead of individual stocks
-                        - Use a shorter time period (1mo or 3mo)
-                        - Check your internet connection
-                        """)
-                    
-                    with suggestion_col2:
-                        st.info("### Alternative Option:")
-                        st.markdown("""
-                        If fetching stock data continues to fail, select the **Generate Synthetic** 
-                        option from the Data Source dropdown instead. This will create synthetic 
-                        market data for testing your portfolio optimization.
-                        """)
-                    return
-                
-                # Success case
-                st.sidebar.success(f"Successfully fetched data for {len(returns_df.columns)} assets")
-                
-                # Show data preview
-                data_preview.subheader("Data Preview (Returns)")
-                data_preview.dataframe(returns_df.head(), use_container_width=True)
-                
-                # Convert to numpy array for the optimization
-                returns = returns_df.values
-        else:
-            st.info("Please enter ticker symbols and click 'Fetch Data'")
-            return
+    data_option = st.sidebar.radio("Data Source:", ["Stock Data", "Upload CSV", "Generate Synthetic"], key="data_source")
+    
+    # Store the data option in session state
+    st.session_state.data_option = data_option
+    
+    # Data loading section - only show if data is not already loaded or if data source changed
+    if not st.session_state.data_loaded or st.session_state.data_option != data_option:
+        if data_option == "Stock Data":
+            st.sidebar.subheader("Stock Data")
             
-    elif data_option == "Upload CSV":
-        uploaded_file = st.sidebar.file_uploader("Upload returns (CSV)", type="csv")
-        if uploaded_file:
-            returns = pd.read_csv(uploaded_file).values
-            if returns.shape[1] < 2:
-                st.sidebar.error("CSV must have at least 2 assets.")
+            # Add info about the data source
+            st.sidebar.info("Using StockDex library to fetch stock data.")
+            
+            # Add a button to randomize stocks
+            if st.sidebar.button("🎲 Randomize (5 S&P 500 Stocks)"):
+                random_tickers = " ".join(random.sample(SP500_STOCKS, 5))
+                st.session_state.tickers_input = random_tickers
+            
+            # Default to ETFs that are more likely to work, but use session state if available
+            tickers_input = st.sidebar.text_area(
+                "Enter ticker symbols (space separated)",
+                value=st.session_state.get('tickers_input', "SPY QQQ DIA"),
+                help="Example: SPY QQQ DIA IWM XLF (ETFs tend to be more reliable)",
+                key="tickers_input"
+            )
+            
+            period = st.sidebar.selectbox(
+                "Period",
+                ["1mo", "3mo", "6mo", "1y", "2y", "5y", "max"],
+                index=2,
+                help="Data period to download",
+                key="period"
+            )
+            
+            if st.sidebar.button("Fetch Data"):
+                with st.spinner("Fetching stock data..."):
+                    # Show data preview section
+                    data_preview = st.empty()
+                    
+                    # Fetch data with detailed debugging
+                    returns_df = fetch_stockdex_data(tickers_input, period)
+                    
+                    # Check if we got valid data
+                    if returns_df.empty:
+                        st.error("Failed to fetch valid data. Please check the API Debug Info in the sidebar for details.")
+                        
+                        # Provide clear suggestions in a more structured format
+                        suggestion_col1, suggestion_col2 = st.columns(2)
+                        with suggestion_col1:
+                            st.info("### Troubleshooting Suggestions:")
+                            st.markdown("""
+                            - Try using ETFs like SPY, QQQ, DIA instead of individual stocks
+                            - Use a shorter time period (1mo or 3mo)
+                            - Check your internet connection
+                            """)
+                        
+                        with suggestion_col2:
+                            st.info("### Alternative Option:")
+                            st.markdown("""
+                            If fetching stock data continues to fail, select the **Generate Synthetic**
+                            option from the Data Source dropdown instead. This will create synthetic
+                            market data for testing your portfolio optimization.
+                            """)
+                        return
+                    
+                    # Success case
+                    st.sidebar.success(f"Successfully fetched data for {len(returns_df.columns)} assets")
+                    
+                    # Show data preview
+                    data_preview.subheader("Data Preview (Returns)")
+                    data_preview.dataframe(returns_df.head(), use_container_width=True)
+                    
+                    # Store data in session state
+                    st.session_state.returns_data = returns_df.values
+                    st.session_state.data_loaded = True
+                    st.session_state.tickers_list = tickers_input.split() if data_option == "Stock Data" else None
+                    
+                    # Set returns for processing
+                    returns = st.session_state.returns_data
+            else:
+                st.info("Please enter ticker symbols and click 'Fetch Data'")
                 return
-            if returns.shape[0] < 30 * returns.shape[1]:
-                st.sidebar.warning("Low sample size may lead to unreliable results.")
-        else:
-            st.sidebar.warning("Please upload a CSV file.")
-            return
-    else:  # Generate Synthetic
-        st.sidebar.subheader("Synthetic Data")
-        n_assets = st.sidebar.slider("Number of assets", 2, 10, 3)
-        n_samples = st.sidebar.slider("Number of samples", 100, 10000, 1000)
-        returns = generate_data(n_assets, n_samples)
+                
+        elif data_option == "Upload CSV":
+            uploaded_file = st.sidebar.file_uploader("Upload returns (CSV)", type="csv")
+            if uploaded_file:
+                returns_df = pd.read_csv(uploaded_file)
+                returns = returns_df.values
+                if returns.shape[1] < 2:
+                    st.sidebar.error("CSV must have at least 2 assets.")
+                    return
+                if returns.shape[0] < 30 * returns.shape[1]:
+                    st.sidebar.warning("Low sample size may lead to unreliable results.")
+                
+                # Store data in session state
+                st.session_state.returns_data = returns
+                st.session_state.data_loaded = True
+                st.session_state.tickers_list = None
+            else:
+                st.sidebar.warning("Please upload a CSV file.")
+                return
+        else:  # Generate Synthetic
+            st.sidebar.subheader("Synthetic Data")
+            n_assets = st.sidebar.slider("Number of assets", 2, 10, 3)
+            n_samples = st.sidebar.slider("Number of samples", 100, 10000, 1000)
+            
+            if st.sidebar.button("Generate Data"):
+                returns = generate_data(n_assets, n_samples)
+                
+                # Store data in session state
+                st.session_state.returns_data = returns
+                st.session_state.data_loaded = True
+                st.session_state.tickers_list = [f"Asset {i+1}" for i in range(n_assets)]
+                
+                st.sidebar.success(f"Successfully generated synthetic data with {n_assets} assets")
+            else:
+                st.info("Click 'Generate Data' to create synthetic market data")
+                return
+    else:
+        # Use data from session state if already loaded
+        returns = st.session_state.returns_data
+        
+        # Show a reset button to allow reloading data
+        if st.sidebar.button("Reset Data"):
+            st.session_state.data_loaded = False
+            st.rerun()
 
     st.sidebar.header("Parameters")
     gamma = st.sidebar.slider("Risk aversion (γ)", 1.0, 10.0, st.session_state.gamma, 0.1,
@@ -230,31 +274,74 @@ def main():
     train_ratio = st.sidebar.slider("Training data ratio", 0.1, 0.9, st.session_state.train_ratio, 0.1,
                                     help="Fraction of data used for estimating parameters (training). The remaining data is used for out-of-sample testing. A value of 0.5 means 50% for training, 50% for testing.",
                                     key="train_ratio")
-    test_dist = st.sidebar.selectbox("Test data distribution", ["Normal", "T-Distribution"],
-                                     index=0 if st.session_state.test_dist == "Normal" else 1,
-                                     help="Distribution used for test data. 'Normal' assumes returns follow a normal distribution. 'T-Distribution' has fatter tails, better representing extreme market events like crashes or rallies.",
-                                     key="test_dist")
+    test_dist = st.sidebar.selectbox(
+        "Test data distribution",
+        ["Normal", "T-Distribution"],
+        index=0 if st.session_state.test_dist == "Normal" else 1,
+        help="""
+        This controls how the test portion of your data is modified for evaluating portfolio performance:
+        
+        - **Normal**: Uses your actual test data without modification. This assumes your historical data is representative of future market conditions.
+        
+        - **T-Distribution**: Transforms your test data to have more extreme movements (both up and down). This simulates more volatile market conditions to stress-test your portfolio.
+        
+        This applies to both real market data and synthetic data. It's a way to see how your portfolio might perform in different market environments.
+        """,
+        key="test_dist"
+    )
 
     # --- Process Data ---
     train_size = int(len(returns) * train_ratio)
     train_returns = returns[:train_size]
     test_returns = returns[train_size:]
 
+    # Apply the selected test data distribution
+    # Note: This applies to both real and synthetic data - we're using the statistical properties
+    # of the training data to generate new test scenarios
+    st.info(f"""
+    ### How Test Data is Used
+    
+    Even when using real market data, we split it into:
+    - **Training data ({train_ratio*100:.0f}%)**: Used to estimate parameters and optimize portfolios
+    - **Test data ({(1-train_ratio)*100:.0f}%)**: Used to evaluate how portfolios would perform out-of-sample
+    
+    The **Test Distribution** option controls how this test data is modified:
+    """)
+    
     if test_dist == "T-Distribution":
-        # Simulate fat-tailed test data
-        df = 3  # Degrees of freedom
-        test_returns = multivariate_t.rvs(shape=np.cov(train_returns, rowvar=False), 
+        # Create a notification to explain what's happening
+        st.info("""
+        **Using T-Distribution**: We're taking your real data and making it more extreme to simulate market stress.
+        
+        This transforms the actual test data to have more frequent and severe market movements (both up and down).
+        It's like asking "How would my portfolio perform if market conditions were more volatile than what we've seen?"
+        """)
+        
+        # Simulate fat-tailed test data using multivariate t-distribution
+        df = 3  # Degrees of freedom (lower = fatter tails = more extreme events)
+        original_test_returns = test_returns.copy()  # Save original for comparison
+        test_returns = multivariate_t.rvs(shape=np.cov(train_returns, rowvar=False),
                                           df=df, size=len(test_returns))
+    else:
+        # Normal distribution (default)
+        st.info("""
+        **Using Normal Distribution**: We're using the actual test data without modification.
+        
+        This assumes the historical data in your test set is representative of future market conditions.
+        It's like asking "How would my portfolio perform if future market conditions are similar to what we've seen?"
+        """)
+        # We're already using the original test data which is assumed to be normally distributed
 
     mu_hat, Sigma_hat = estimate_parameters(train_returns)
 
     # --- Optimize Portfolios ---
-    w_mv = mean_variance_optimization(mu_hat, Sigma_hat, gamma, no_short_selling)
-    w_robust = wasserstein_robust_optimization(mu_hat, Sigma_hat, gamma, epsilon, no_short_selling)
+    with st.spinner("Optimizing portfolios... Please wait."):
+        w_mv = mean_variance_optimization(mu_hat, Sigma_hat, gamma, no_short_selling)
+        w_robust = wasserstein_robust_optimization(mu_hat, Sigma_hat, gamma, epsilon, no_short_selling)
 
-    # --- Evaluate Performance ---
-    mv_metrics = evaluate_portfolio(test_returns, w_mv, alpha)
-    robust_metrics = evaluate_portfolio(test_returns, w_robust, alpha)
+        # --- Evaluate Performance ---
+        mv_metrics = evaluate_portfolio(test_returns, w_mv, alpha)
+        robust_metrics = evaluate_portfolio(test_returns, w_robust, alpha)
 
     # --- Display Results ---
     # Create a container for all explanations
@@ -297,23 +384,33 @@ def main():
             """)
     
     # Generate efficient frontier data with more points and better sorting
-    gammas = np.logspace(-1, 2, 30)  # Use logarithmic spacing for better coverage
-    mv_returns, mv_vols = [], []
-    robust_returns, robust_vols = [], []
-
-    for g in gammas:
-        try:
-            w_mv = mean_variance_optimization(mu_hat, Sigma_hat, g, no_short_selling)
-            w_robust = wasserstein_robust_optimization(mu_hat, Sigma_hat, g, epsilon, no_short_selling)
-            mv_m = evaluate_portfolio(test_returns, w_mv, alpha)
-            robust_m = evaluate_portfolio(test_returns, w_robust, alpha)
-            mv_returns.append(mv_m["Expected Return"])
-            mv_vols.append(mv_m["Volatility"])
-            robust_returns.append(robust_m["Expected Return"])
-            robust_vols.append(robust_m["Volatility"])
-        except Exception as e:
-            st.warning(f"Optimization failed for gamma={g:.2f}: {str(e)}")
-            continue
+    with st.spinner("Generating efficient frontier... This may take a moment."):
+        gammas = np.logspace(-1, 2, 30)  # Use logarithmic spacing for better coverage
+        mv_returns, mv_vols = [], []
+        robust_returns, robust_vols = [], []
+        
+        # Progress bar for efficient frontier calculation
+        progress_bar = st.progress(0)
+        
+        for i, g in enumerate(gammas):
+            try:
+                w_mv = mean_variance_optimization(mu_hat, Sigma_hat, g, no_short_selling)
+                w_robust = wasserstein_robust_optimization(mu_hat, Sigma_hat, g, epsilon, no_short_selling)
+                mv_m = evaluate_portfolio(test_returns, w_mv, alpha)
+                robust_m = evaluate_portfolio(test_returns, w_robust, alpha)
+                mv_returns.append(mv_m["Expected Return"])
+                mv_vols.append(mv_m["Volatility"])
+                robust_returns.append(robust_m["Expected Return"])
+                robust_vols.append(robust_m["Volatility"])
+                
+                # Update progress bar
+                progress_bar.progress((i + 1) / len(gammas))
+            except Exception as e:
+                st.warning(f"Optimization failed for gamma={g:.2f}: {str(e)}")
+                continue
+        
+        # Clear progress bar when done
+        progress_bar.empty()
     
     # Sort the points by volatility for smoother curves
     mv_points = sorted(zip(mv_vols, mv_returns))
@@ -353,11 +450,10 @@ def main():
             "Wasserstein-Robust": w_robust.round(4)
         })
         
-        if data_option == "Stock Data":
-            # Add asset names if using Stock Data
-            tickers_list = tickers_input.split()
-            if len(tickers_list) == weights_df.shape[0]:
-                weights_df.index = tickers_list
+        # Add asset names from session state if available
+        if st.session_state.get('tickers_list') is not None:
+            if len(st.session_state.tickers_list) == weights_df.shape[0]:
+                weights_df.index = st.session_state.tickers_list
             
         st.dataframe(weights_df, use_container_width=True)
         
@@ -440,9 +536,35 @@ def main():
             ax.scatter(mv_vols, mv_returns, label="Traditional MV", color='blue', alpha=0.7, s=50)
             ax.scatter(robust_vols, robust_returns, label="Wasserstein-Robust", color='orange', alpha=0.7, s=50)
             
-            # Add lines connecting the points for better visualization
-            ax.plot(mv_vols, mv_returns, 'b-', alpha=0.6, linewidth=2)
-            ax.plot(robust_vols, robust_returns, 'orange', alpha=0.6, linewidth=2)
+            # Use scipy's interpolation for smoother curves
+            from scipy.interpolate import make_interp_spline
+            
+            # Only apply smoothing if we have enough points
+            if len(mv_vols) > 3:
+                # Create smooth curves for Traditional MV
+                mv_x_new = np.linspace(min(mv_vols), max(mv_vols), 300)
+                try:
+                    mv_spl = make_interp_spline(mv_vols, mv_returns, k=3)
+                    mv_y_new = mv_spl(mv_x_new)
+                    ax.plot(mv_x_new, mv_y_new, 'b-', alpha=0.6, linewidth=2)
+                except Exception:
+                    # Fall back to simple line if spline fails
+                    ax.plot(mv_vols, mv_returns, 'b-', alpha=0.6, linewidth=2)
+            else:
+                ax.plot(mv_vols, mv_returns, 'b-', alpha=0.6, linewidth=2)
+            
+            # Create smooth curves for Wasserstein-Robust
+            if len(robust_vols) > 3:
+                robust_x_new = np.linspace(min(robust_vols), max(robust_vols), 300)
+                try:
+                    robust_spl = make_interp_spline(robust_vols, robust_returns, k=3)
+                    robust_y_new = robust_spl(robust_x_new)
+                    ax.plot(robust_x_new, robust_y_new, 'orange', alpha=0.6, linewidth=2)
+                except Exception:
+                    # Fall back to simple line if spline fails
+                    ax.plot(robust_vols, robust_returns, 'orange', alpha=0.6, linewidth=2)
+            else:
+                ax.plot(robust_vols, robust_returns, 'orange', alpha=0.6, linewidth=2)
             
             # Highlight the minimum volatility portfolio for each approach
             min_vol_idx_mv = np.argmin(mv_vols)
@@ -455,14 +577,32 @@ def main():
                       color='orange', s=150, alpha=0.8, edgecolors='black', linewidth=2,
                       label="Min Volatility (Robust)")
             
-            # Add annotations
-            ax.annotate("Lower Risk", xy=(min(mv_vols + robust_vols), (max(mv_returns + robust_returns) + min(mv_returns + robust_returns))/2),
-                       xytext=(-50, 0), textcoords="offset points", fontsize=12,
-                       arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=-.2"))
+            # Add annotations in better positions
+            min_vol = min(mv_vols + robust_vols)
+            max_vol = max(mv_vols + robust_vols)
+            min_ret = min(mv_returns + robust_returns)
+            max_ret = max(mv_returns + robust_returns)
             
-            ax.annotate("Higher Return", xy=((max(mv_vols + robust_vols) + min(mv_vols + robust_vols))/2, max(mv_returns + robust_returns)),
-                       xytext=(0, 30), textcoords="offset points", fontsize=12,
-                       arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=.2"))
+            # Position annotations outside the plot area
+            ax.annotate("Lower Risk",
+                       xy=(min_vol, (max_ret + min_ret)/2),
+                       xytext=(-80, 0),
+                       textcoords="offset points",
+                       fontsize=12,
+                       fontweight='bold',
+                       color='green',
+                       bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="green", alpha=0.8),
+                       arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=-.2", color='green'))
+            
+            ax.annotate("Higher Return",
+                       xy=((max_vol + min_vol)/2, max_ret),
+                       xytext=(0, 40),
+                       textcoords="offset points",
+                       fontsize=12,
+                       fontweight='bold',
+                       color='green',
+                       bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="green", alpha=0.8),
+                       arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=.2", color='green'))
             
             # Improve axis labels and styling
             ax.set_xlabel("Volatility (Risk)", fontsize=14, fontweight='bold')
