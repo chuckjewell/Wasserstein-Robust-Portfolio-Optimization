@@ -296,20 +296,32 @@ def main():
             - **Comparing the two curves**: The gap between the blue and orange curves shows the "cost of robustness" - how much expected return you sacrifice for greater stability
             """)
     
-    # Generate efficient frontier data
-    gammas = np.linspace(1, 10, 20)
+    # Generate efficient frontier data with more points and better sorting
+    gammas = np.logspace(-1, 2, 30)  # Use logarithmic spacing for better coverage
     mv_returns, mv_vols = [], []
     robust_returns, robust_vols = [], []
 
     for g in gammas:
-        w_mv = mean_variance_optimization(mu_hat, Sigma_hat, g, no_short_selling)
-        w_robust = wasserstein_robust_optimization(mu_hat, Sigma_hat, g, epsilon, no_short_selling)
-        mv_m = evaluate_portfolio(test_returns, w_mv, alpha)
-        robust_m = evaluate_portfolio(test_returns, w_robust, alpha)
-        mv_returns.append(mv_m["Expected Return"])
-        mv_vols.append(mv_m["Volatility"])
-        robust_returns.append(robust_m["Expected Return"])
-        robust_vols.append(robust_m["Volatility"])
+        try:
+            w_mv = mean_variance_optimization(mu_hat, Sigma_hat, g, no_short_selling)
+            w_robust = wasserstein_robust_optimization(mu_hat, Sigma_hat, g, epsilon, no_short_selling)
+            mv_m = evaluate_portfolio(test_returns, w_mv, alpha)
+            robust_m = evaluate_portfolio(test_returns, w_robust, alpha)
+            mv_returns.append(mv_m["Expected Return"])
+            mv_vols.append(mv_m["Volatility"])
+            robust_returns.append(robust_m["Expected Return"])
+            robust_vols.append(robust_m["Volatility"])
+        except Exception as e:
+            st.warning(f"Optimization failed for gamma={g:.2f}: {str(e)}")
+            continue
+    
+    # Sort the points by volatility for smoother curves
+    mv_points = sorted(zip(mv_vols, mv_returns))
+    robust_points = sorted(zip(robust_vols, robust_returns))
+    
+    # Unzip the sorted points
+    mv_vols, mv_returns = zip(*mv_points) if mv_points else ([], [])
+    robust_vols, robust_returns = zip(*robust_points) if robust_points else ([], [])
     
     # Calculate evaluation metrics
     sharpe_mv = mv_metrics['Expected Return'] / mv_metrics['Volatility']
@@ -407,20 +419,63 @@ def main():
         # Efficient Frontier Plot
         st.subheader("Efficient Frontier")
         
+        # Add explanatory text about the efficient frontier
+        st.markdown("""
+        ### Understanding the Efficient Frontier Graph
+        
+        This graph shows the optimal portfolios that offer the highest expected return for a given level of risk:
+        
+        - **Each point** represents a portfolio with a different risk aversion level
+        - **X-axis (Volatility)**: Lower is better (less risk)
+        - **Y-axis (Expected Return)**: Higher is better (more return)
+        - **Upper left corner** has the most favorable risk-return tradeoff
+        """)
+        
         # Create a larger figure for better visualization
         fig, ax = plt.subplots(figsize=(12, 9))
-        ax.scatter(mv_vols, mv_returns, label="Traditional MV", alpha=0.7, s=50)
-        ax.scatter(robust_vols, robust_returns, label="Wasserstein-Robust", alpha=0.7, s=50)
         
-        # Add lines connecting the points for better visualization
-        ax.plot(mv_vols, mv_returns, 'b--', alpha=0.4)
-        ax.plot(robust_vols, robust_returns, 'r--', alpha=0.4)
-        
-        ax.set_xlabel("Volatility", fontsize=12)
-        ax.set_ylabel("Expected Return", fontsize=12)
-        ax.grid(True, alpha=0.3)
-        ax.legend(fontsize=10)
-        st.pyplot(fig, use_container_width=True)
+        # Only plot if we have data points
+        if len(mv_vols) > 0 and len(robust_vols) > 0:
+            # Plot the efficient frontiers with smoother curves
+            ax.scatter(mv_vols, mv_returns, label="Traditional MV", color='blue', alpha=0.7, s=50)
+            ax.scatter(robust_vols, robust_returns, label="Wasserstein-Robust", color='orange', alpha=0.7, s=50)
+            
+            # Add lines connecting the points for better visualization
+            ax.plot(mv_vols, mv_returns, 'b-', alpha=0.6, linewidth=2)
+            ax.plot(robust_vols, robust_returns, 'orange', alpha=0.6, linewidth=2)
+            
+            # Highlight the minimum volatility portfolio for each approach
+            min_vol_idx_mv = np.argmin(mv_vols)
+            min_vol_idx_robust = np.argmin(robust_vols)
+            
+            ax.scatter([mv_vols[min_vol_idx_mv]], [mv_returns[min_vol_idx_mv]],
+                      color='blue', s=150, alpha=0.8, edgecolors='black', linewidth=2,
+                      label="Min Volatility (Traditional)")
+            ax.scatter([robust_vols[min_vol_idx_robust]], [robust_returns[min_vol_idx_robust]],
+                      color='orange', s=150, alpha=0.8, edgecolors='black', linewidth=2,
+                      label="Min Volatility (Robust)")
+            
+            # Add annotations
+            ax.annotate("Lower Risk", xy=(min(mv_vols + robust_vols), (max(mv_returns + robust_returns) + min(mv_returns + robust_returns))/2),
+                       xytext=(-50, 0), textcoords="offset points", fontsize=12,
+                       arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=-.2"))
+            
+            ax.annotate("Higher Return", xy=((max(mv_vols + robust_vols) + min(mv_vols + robust_vols))/2, max(mv_returns + robust_returns)),
+                       xytext=(0, 30), textcoords="offset points", fontsize=12,
+                       arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=.2"))
+            
+            # Improve axis labels and styling
+            ax.set_xlabel("Volatility (Risk)", fontsize=14, fontweight='bold')
+            ax.set_ylabel("Expected Return", fontsize=14, fontweight='bold')
+            ax.grid(True, alpha=0.3)
+            ax.legend(fontsize=12, loc='best')
+            
+            # Add title
+            ax.set_title("Efficient Frontier: Risk-Return Tradeoff", fontsize=16, fontweight='bold')
+            
+            st.pyplot(fig, use_container_width=True)
+        else:
+            st.error("Unable to generate efficient frontier. Try different parameters or data.")
 
 if __name__ == "__main__":
     main()
