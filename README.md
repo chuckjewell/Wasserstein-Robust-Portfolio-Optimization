@@ -127,3 +127,11 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - Based on research in robust portfolio optimization using Wasserstein distance
 - Utilizes the StockDex library for fetching financial data
 - Incorporates Stochastic Discount Factor (SDF) concepts from asset pricing theory
+
+## References
+
+This project is based on the research paper:
+
+- "Risk Reduction Using Wasserstein Measure with Stochastic Discount" (included in the repository as a PDF)
+
+The paper explores how combining Wasserstein distance-based robust optimization with Stochastic Discount Factor (SDF) analysis can lead to more resilient portfolios, especially in volatile market conditions.
